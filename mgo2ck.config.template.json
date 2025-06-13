@@ -1,0 +1,41 @@
+{
+  "Name": "demo",
+  "MapMgo2Ck": [
+    {
+      "MgoConn": {
+        "Hosts": ["127.0.0.1:21017"],
+        "User": "root",
+        "Password":"adja737An",
+        "PoolNum":64
+      },
+      "CkConn": {
+        "Host": "127.0.0.1:9000",
+        "User": "default",
+        "Pwd": "",
+        "Db": ""
+      },
+      "AllDb": true,
+      "opts": [
+        "insert",
+        "update"
+      ]
+    }
+  ],
+  "SysMgoConn": {
+    "Hosts": ["127.0.0.1:21017"],
+    "User": "root",
+    "Password":"adja737An",
+    "PoolNum":64
+  },
+  "Log": {
+    "File": {
+      "DefaultLogDir":"/var/data/logs/mgo2ck",
+      "BillLogDir":"/var/data/logs/mgo2ck",
+      "MaxFileSizeBytes": 0,
+      "LogInfoBeforeFileSizeBytes": -1,
+      "Level":"DBG",
+      "AlertLevel": "WARN",
+      "FileMaxRemainDays": 0
+    }
+  }
+}
