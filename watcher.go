@@ -10,6 +10,7 @@ import (
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
 	"strings"
+	"sync/atomic"
 	"time"
 )
 
@@ -22,6 +23,7 @@ type MgoWatcher struct {
 	SyncSinceSecAgo      int64
 	StreamList           []*ChangeStream
 	FailStreamList       []*ChangeStream
+	Paused               atomic.Bool
 }
 
 type ChangeStream struct {
@@ -53,6 +55,9 @@ func (w *MgoWatcher) watch() error {
 
 	resumeToken, err := GetResumeToken(w.Name)
 	if err != nil {
+		if w.isErrCazOfPaused(err) {
+			return nil
+		}
 		loggo.Errorf("GetResumeToken failed: %v", err)
 		return err
 	}
@@ -64,10 +69,18 @@ func (w *MgoWatcher) watch() error {
 
 	changeStream, err := w.MgoConn.Watch(context.TODO(), w.ChangeStreamPipeline, opt)
 	if err != nil {
+		if w.isErrCazOfPaused(err) {
+			return nil
+		}
+
 		if strings.Contains(err.Error(), "ChangeStreamHistoryLost") || strings.Contains(err.Error(), "resume token was not found") {
 			// ResumeToken过期
 			err = RecWatcherErr(w.Name, err)
 			if err != nil {
+				if w.isErrCazOfPaused(err) {
+					return nil
+				}
+
 				loggo.Errorf("RecWatcherErr %v", err)
 				return err
 			}
@@ -75,12 +88,20 @@ func (w *MgoWatcher) watch() error {
 			opt = options.ChangeStream().SetFullDocument(options.UpdateLookup).SetStartAtOperationTime(timestamp)
 			changeStream, err = w.MgoConn.Watch(context.TODO(), w.ChangeStreamPipeline, opt)
 			if err != nil {
+				if w.isErrCazOfPaused(err) {
+					return nil
+				}
+
 				loggo.Errorf("watch change stream err:%v", err)
 				return err
 			}
 		} else if strings.Contains(err.Error(), "BSONObjectTooLarge") {
 			err = RecWatcherErr(w.Name, err)
 			if err != nil {
+				if w.isErrCazOfPaused(err) {
+					return nil
+				}
+
 				loggo.Errorf("RecWatcherErr %v", err)
 				return err
 			}
@@ -91,6 +112,10 @@ func (w *MgoWatcher) watch() error {
 			opt.SetStartAtOperationTime(&primitive.Timestamp{T: uint32(time.Now().Unix()), I: 0})
 			changeStream, err = w.MgoConn.Watch(context.TODO(), w.ChangeStreamPipeline, opt)
 			if err != nil {
+				if w.isErrCazOfPaused(err) {
+					return nil
+				}
+
 				loggo.Errorf("watch change stream err:%v", err)
 				return err
 			}
@@ -101,7 +126,7 @@ func (w *MgoWatcher) watch() error {
 
 	runtimeutil.Go(func() {
 		for changeStream.Next(context.TODO()) {
-			if paused.Load() {
+			if w.Paused.Load() {
 				break
 			}
 
@@ -144,8 +169,7 @@ func (w *MgoWatcher) watch() error {
 		}
 
 		if err = changeStream.Err(); err != nil {
-			if strings.Contains(err.Error(), "ChangeStreamHistoryLost") ||
-				strings.Contains(err.Error(), "resume token was not found") {
+			if !w.Paused.Load() && (strings.Contains(err.Error(), "ChangeStreamHistoryLost") || strings.Contains(err.Error(), "resume token was not found")) {
 				err = RecWatcherErr(w.Name, err)
 				if err != nil {
 					loggo.Errorf("record watcher err occur exception:%v", err)
@@ -159,4 +183,15 @@ func (w *MgoWatcher) watch() error {
 	})
 
 	return nil
+}
+
+func (w *MgoWatcher) isErrCazOfPaused(err error) bool {
+	if !w.Paused.Load() {
+		return false
+	}
+	if strings.Contains(err.Error(), "attempted to check out a connection from closed connection pool") ||
+		strings.Contains(err.Error(), "client is disconnected") {
+		return true
+	}
+	return false
 }
