@@ -29,8 +29,6 @@ var (
 )
 
 func reload(confFileName string) error {
-	paused.Store(true)
-
 	removeStoppedWatchers()
 
 	tk := time.NewTicker(time.Second * 5)
@@ -51,10 +49,7 @@ func reload(confFileName string) error {
 		return err
 	}
 
-	mgoConns = make(map[string]*mongo.Client)
-	ckConns = make(map[string]*driver.Conn)
-
-	if err := InitDbConns(); err != nil {
+	if err := ReInitDbConns(); err != nil {
 		return err
 	}
 
@@ -66,9 +61,30 @@ func reload(confFileName string) error {
 		return err
 	}
 
-	paused.Store(false)
+	return nil
+}
+
+func ReInitDbConns() error {
+	CloseDbConns()
+
+	mgoConns = make(map[string]*mongo.Client)
+	ckConns = make(map[string]*driver.Conn)
+
+	if err := InitDbConns(); err != nil {
+		return err
+	}
 
 	return nil
+}
+
+func CloseDbConns() {
+	for _, mgoConn := range mgoConns {
+		_ = mgoConn.Disconnect(context.Background())
+	}
+
+	for _, ckConn := range ckConns {
+		_ = (*ckConn).Close()
+	}
 }
 
 func stop() {
@@ -85,9 +101,7 @@ func stop() {
 		}
 	}
 
-	for MustQueue().Size() > 0 {
-		time.Sleep(time.Second * 5)
-	}
+	CloseDbConns()
 }
 
 func removeStoppedWatchers() {
@@ -96,6 +110,8 @@ func removeStoppedWatchers() {
 
 	var removedWatcherNames []string
 	for _, watcher := range watchers {
+		watcher.Paused.Store(true)
+
 		// 有未消费的消息
 		if len(watcher.FailStreamList) != 0 || len(watcher.StreamList) != 0 {
 			continue
